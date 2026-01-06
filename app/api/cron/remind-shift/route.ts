@@ -1,58 +1,51 @@
-import { createClient } from "@/lib/supabase/server";
-import { addMonths, setDate, format } from "date-fns";
-import { NextResponse } from "next/server";
-import { redirect } from "next/navigation";
+import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const secret = searchParams.get("key");
-
-  // セキュリティチェック
-  if (secret !== process.env.CRON_SECRET) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  // 1. Vercel Cronからのアクセスであることを確認
+  const authHeader = request.headers.get('authorization');
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new NextResponse('Unauthorized', { status: 401 });
   }
 
-  const supabase = await createClient();
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) {
+    return NextResponse.json({ error: 'Webhook URL not set' }, { status: 500 });
+  }
 
-  // 1. 給料日と給与タイトルの計算
-  // 例: 今日が1月6日なら -> 給料日は2月15日、タイトルは「1月分給与」
-  const today = new Date();
-  const nextMonth = addMonths(today, 1);
-  const payDay = setDate(nextMonth, 15);
-  
-  const targetDateStr = format(payDay, "yyyy-MM-dd");
-  const targetTitle = `${format(today, "M")}月分給与`; 
-  const shiftWage = 1260 * 4; // 1回あたりの給与
+  // 2. ワンタップ登録用URLの作成
+  // 本番環境のURLをここに書いてください
+  const appUrl = "https://my-finance-app-b1xe.vercel.app/"; 
+  const secret = process.env.CRON_SECRET;
+  const quickAddUrl = `${appUrl}/api/quick-add?key=${secret}`;
 
-  // 2. 既存のレコードがあるか探す
-  // 条件: 支払日が一致し、まだ受け取っていない(is_received=false)もの
-  const { data: existingRecord } = await supabase
-    .from("receivables")
-    .select("*")
-    .eq("due_date", targetDateStr)
-    .eq("is_received", false)
-    .maybeSingle(); // 0件か1件かを取得
+  // 3. Discordへの通知送信
+  const payload = {
+    username: "給与管理Bot",
+    embeds: [
+      {
+        title: "✅ シフト実績を登録する",
+        description: "お疲れ様でした！\n下のリンクをタップすると即座に登録されます。",
+        url: quickAddUrl,
+        color: 3066993,
+        fields: [
+          {
+            name: "登録内容",
+            value: "¥5,040 (労働債権へ加算)",
+            inline: true
+          }
+        ]
+      }
+    ]
+  };
 
-  if (existingRecord) {
-    // A. 既存レコードがある場合 -> 加算更新 (Update)
-    await supabase
-      .from("receivables")
-      .update({ 
-        amount: existingRecord.amount + shiftWage,
-        // タイトルが「固定シフト」とかになっていたら「〇月分給与」に上書き統一しても良いかも
-        title: targetTitle 
-      })
-      .eq("id", existingRecord.id);
-  } else {
-    // B. ない場合（その月の最初の出勤） -> 新規作成 (Insert)
-    await supabase
-      .from("receivables")
-      .insert({
-        title: targetTitle,
-        amount: shiftWage,
-        due_date: targetDateStr,
-        is_received: false,
-      });
+  const discordRes = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!discordRes.ok) {
+    return NextResponse.json({ error: 'Failed to send to Discord' }, { status: 500 });
   }
 
   return NextResponse.json({ success: true });
