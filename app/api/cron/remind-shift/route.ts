@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { addMonths, setDate, format } from "date-fns";
+import { NextResponse } from "next/server";
 import { redirect } from "next/navigation";
 
 export async function GET(request: Request) {
@@ -54,6 +55,5 @@ export async function GET(request: Request) {
       });
   }
 
-  // 完了後のリダイレクト
-  redirect("/");
+  return NextResponse.json({ success: true });
 }
